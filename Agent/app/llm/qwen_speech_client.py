@@ -29,23 +29,37 @@ class QwenSpeechClient:
 
         resolved_api_key = (
             api_key
+            or os.getenv("TTS_API_KEY")
             or os.getenv("DASHSCOPE_API_KEY")
             or os.getenv("QWEN_API_KEY")
         )
         if not resolved_api_key:
-            raise ValueError("DASHSCOPE_API_KEY or QWEN_API_KEY is not configured")
+            raise ValueError(
+                "TTS_API_KEY, DASHSCOPE_API_KEY, or QWEN_API_KEY is not configured"
+            )
 
         dashscope.api_key = resolved_api_key
         dashscope.base_websocket_api_url = (
             websocket_url
+            or os.getenv("TTS_WEBSOCKET_URL")
             or os.getenv("DASHSCOPE_WEBSOCKET_URL")
             or DEFAULT_WEBSOCKET_URL
         )
 
-        self.model = model or os.getenv("QWEN_TTS_MODEL", DEFAULT_SPEECH_MODEL)
-        self.voice = os.getenv("QWEN_TTS_VOICE", DEFAULT_SPEECH_VOICE)
+        self.model = (
+            model
+            or os.getenv("TTS_MODEL")
+            or os.getenv("QWEN_TTS_MODEL")
+            or DEFAULT_SPEECH_MODEL
+        )
+        self.voice = (
+            os.getenv("TTS_VOICE")
+            or os.getenv("QWEN_TTS_VOICE")
+            or DEFAULT_SPEECH_VOICE
+        )
         self.websocket_url = (
             websocket_url
+            or os.getenv("TTS_WEBSOCKET_URL")
             or os.getenv("DASHSCOPE_WEBSOCKET_URL")
             or DEFAULT_WEBSOCKET_URL
         )

@@ -233,24 +233,47 @@ def _normalize_embedding(embedding: list[float]) -> list[float]:
     return (vector / norm).tolist()
 
 
+def _resolve_api_key() -> str:
+    key = (
+        os.getenv("EMBEDDING_API_KEY")
+        or os.getenv("LLM_API_KEY")
+        or os.getenv("QWEN_API_KEY")
+    )
+    if not key:
+        raise ValueError(
+            "EMBEDDING_API_KEY, LLM_API_KEY, or QWEN_API_KEY is not configured"
+        )
+    return key
+
+
+def _resolve_base_url() -> str:
+    return (
+        os.getenv("EMBEDDING_BASE_URL")
+        or os.getenv("LLM_BASE_URL")
+        or os.getenv("QWEN_BASE_URL")
+        or DEFAULT_BASE_URL
+    )
+
+
 def _embedding_client() -> OpenAI:
-    api_key = os.getenv("QWEN_API_KEY")
-    if not api_key:
-        raise ValueError("QWEN_API_KEY is not configured")
     return OpenAI(
-        api_key=api_key,
-        base_url=os.getenv("QWEN_BASE_URL", DEFAULT_BASE_URL),
+        api_key=_resolve_api_key(),
+        base_url=_resolve_base_url(),
     )
 
 
 def _embedding_model() -> str:
-    return os.getenv("QWEN_EMBEDDING_MODEL", DEFAULT_EMBEDDING_MODEL)
+    return (
+        os.getenv("EMBEDDING_MODEL")
+        or os.getenv("QWEN_EMBEDDING_MODEL")
+        or DEFAULT_EMBEDDING_MODEL
+    )
 
 
 def _embedding_dimensions() -> int:
-    raw_value = os.getenv("QWEN_EMBEDDING_DIMENSIONS")
+    raw_value = os.getenv("EMBEDDING_DIMENSIONS") or os.getenv("QWEN_EMBEDDING_DIMENSIONS")
     if raw_value is None:
         return DEFAULT_EMBEDDING_DIMENSIONS
     if not re.fullmatch(r"\d+", raw_value):
-        raise ValueError("QWEN_EMBEDDING_DIMENSIONS must be an integer")
+        raise ValueError("EMBEDDING_DIMENSIONS or QWEN_EMBEDDING_DIMENSIONS must be an integer")
     return int(raw_value)

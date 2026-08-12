@@ -18,14 +18,28 @@ class QwenClient:
         base_url: Optional[str] = None,
         model: Optional[str] = None,
     ) -> None:
-        resolved_api_key = api_key or os.getenv("QWEN_API_KEY")
+        resolved_api_key = (
+            api_key
+            or os.getenv("LLM_API_KEY")
+            or os.getenv("QWEN_API_KEY")
+        )
         if not resolved_api_key:
-            raise ValueError("QWEN_API_KEY is not configured")
+            raise ValueError("LLM_API_KEY or QWEN_API_KEY is not configured")
 
-        self.model = model or os.getenv("QWEN_MODEL", DEFAULT_MODEL)
+        self.model = (
+            model
+            or os.getenv("LLM_MODEL")
+            or os.getenv("QWEN_MODEL")
+            or DEFAULT_MODEL
+        )
         self.client = OpenAI(
             api_key=resolved_api_key,
-            base_url=base_url or os.getenv("QWEN_BASE_URL", DEFAULT_BASE_URL),
+            base_url=(
+                base_url
+                or os.getenv("LLM_BASE_URL")
+                or os.getenv("QWEN_BASE_URL")
+                or DEFAULT_BASE_URL
+            ),
         )
 
     def complete_with_tools(
