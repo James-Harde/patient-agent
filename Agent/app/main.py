@@ -1,4 +1,4 @@
-# 作者：小红书@人间清醒的李某人
+
 
 from pathlib import Path
 
@@ -19,7 +19,7 @@ STATIC_DIR = Path(__file__).resolve().parent / "static"
 openapi_tags = [
     {
         "name": "Agent",
-        "description": "通过 Qwen 大模型结合内部工具进行信息查询。",
+        "description": "通过大模型结合内部工具进行信息查询。",
     },
     {
         "name": "Patients",

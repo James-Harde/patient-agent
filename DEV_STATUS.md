@@ -2,7 +2,7 @@
 
 ## Current Goal
 
-Prepare the repository for staged secondary development of the patient assistant Agent without changing application behavior yet.
+结构与命名收口 — 把模型调用、配置读取、语音调用、Agent 编排、RAG 检索放到更清晰的位置，去掉业务代码中的 qwen_* 文件名和 Qwen* 类名绑定。
 
 ## Working Agreement
 
@@ -17,24 +17,26 @@ Prepare the repository for staged secondary development of the patient assistant
 |---:|---|---|---|
 | 0 | Coordination docs and manual tests | Done | Created `DEV_STATUS.md`, `DEV_LOG.md`, and `MANUAL_TESTS.md` |
 | 1 | Generalize model config names | Done | Add `LLM_*`, `EMBEDDING_*`, and `TTS_*` with `QWEN_*` fallback |
-| 2 | SSE streaming output | Pending | Stream answer/progress to the existing frontend |
-| 3 | LangGraph orchestration | Pending | Replace the handwritten Agent loop with graph nodes |
-| 4 | MCP tool-layer completion | Pending | Make tools callable through a real MCP client/server path |
-| 5 | LangChain componentization | Pending | Standardize model, tool, retriever, and vector-store adapters where useful |
-| 6 | Security boundary layer | Pending | Add auth, patient data isolation, tool allowlists, and log redaction |
-| 7 | Docker Compose | Pending | Add local service orchestration after external services are needed |
-| 8 | Milvus hybrid RAG | Pending | Replace FAISS with dense + BM25 + RRF hybrid retrieval |
-| 9 | PostgreSQL migration | Pending | Move from SQLite when multi-user or long-running deployment is required |
+| 2 | 结构与命名收口 | Done | Move/rename files, remove qwen_* naming, centralize config in llm_env.py |
+| 3 | SSE streaming output | Pending | Stream answer/progress to the existing frontend |
+| 4 | LangGraph orchestration | Pending | Replace the handwritten Agent loop with graph nodes |
+| 5 | MCP tool-layer completion | Pending | Make tools callable through a real MCP client/server path |
+| 6 | LangChain componentization | Pending | Standardize model, tool, retriever, and vector-store adapters where useful |
+| 7 | Security boundary layer | Pending | Add auth, patient data isolation, tool allowlists, and log redaction |
+| 8 | Docker Compose | Pending | Add local service orchestration after external services are needed |
+| 9 | Milvus hybrid RAG | Pending | Replace FAISS with dense + BM25 + RRF hybrid retrieval |
+| 10 | PostgreSQL migration | Pending | Move from SQLite when multi-user or long-running deployment is required |
 
 ## Active Task
 
-SSE streaming output — stream answer/progress to the existing frontend.
+(None — 结构与命名收口 is complete.)
 
 ## Completed
 
 - `AGENTS.md` contributor guide exists at repository root.
 - `DEV_STATUS.md`, `DEV_LOG.md`, and `MANUAL_TESTS.md` exist at repository root.
 - Model configuration generalization: `LLM_*`, `EMBEDDING_*`, `TTS_*` env vars with `QWEN_*` / `DASHSCOPE_*` fallback.
+- 结构与命名收口：文件移动/重命名、类名去 Qwen 化、集中配置、import 同步。
 
 ## Not Started
 
@@ -49,11 +51,7 @@ SSE streaming output — stream answer/progress to the existing frontend.
 
 ## Next Step
 
-Start SSE streaming output task:
-
-```text
-Stream answer/progress from the Agent to the existing frontend via Server-Sent Events.
-```
+人工验收通过后再讨论是否进入 SSE。
 
 ## Current Manual Acceptance Entry
 

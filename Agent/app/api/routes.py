@@ -1,4 +1,4 @@
-# 作者：小红书@人间清醒的李某人
+
 
 import base64
 import json
@@ -13,9 +13,9 @@ from sqlalchemy.orm import Session
 
 from app.db.session import DATA_DIR
 from app.db.session import get_db
-from app.llm.qwen_client import QwenClient
-from app.llm.qwen_mcp_agent import QwenMCPAgent
-from app.llm.qwen_speech_client import QwenSpeechClient
+from app.llm.llm import LLMClient
+from app.llm.speech_client import SpeechClient
+from app.orchestration.patient_agent import PatientAgent
 from app.schemas.agent import AgentQueryRequest, AgentQueryResponse
 from app.schemas.memory import (
     BusinessMemoryExtractRequest,
@@ -232,15 +232,15 @@ def agent_query(
     db: Session = Depends(get_db),
 ) -> AgentQueryResponse:
     try:
-        llm_client = QwenClient()
-        speech_client = QwenSpeechClient() if payload.enable_speech else None
+        llm_client = LLMClient()
+        speech_client = SpeechClient() if payload.enable_speech else None
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=str(exc),
         )
 
-    agent = QwenMCPAgent(db=db, llm_client=llm_client)
+    agent = PatientAgent(db=db, llm_client=llm_client)
     try:
         pre_resolved_patient = _resolve_patient_from_agent_result(
             db,

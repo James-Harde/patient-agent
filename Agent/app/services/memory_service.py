@@ -1,4 +1,4 @@
-# 作者：小红书@人间清醒的李某人
+
 
 from __future__ import annotations
 
@@ -20,10 +20,10 @@ from app.db.models import (
 )
 from app.services import (
     medical_case_service,
-    memory_vector_service,
     patient_service,
     visit_record_service,
 )
+from app.services.rag import memory_vector_service
 
 logger = logging.getLogger("uvicorn.error")
 

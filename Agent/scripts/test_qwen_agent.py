@@ -1,4 +1,4 @@
-# 作者：小红书@人间清醒的李某人
+
 
 import base64
 import json
@@ -7,8 +7,8 @@ import sys
 
 from app.db.session import SessionLocal
 from app.env import load_env_file
-from app.llm.qwen_client import QwenClient
-from app.llm.qwen_mcp_agent import QwenMCPAgent
+from app.llm.llm import LLMClient
+from app.orchestration.patient_agent import PatientAgent
 
 
 def _load_image_file(path: str) -> dict[str, str]:
@@ -45,8 +45,8 @@ def main() -> None:
 
     db = SessionLocal()
     try:
-        client = QwenClient()
-        agent = QwenMCPAgent(db=db, llm_client=client)
+        client = LLMClient()
+        agent = PatientAgent(db=db, llm_client=client)
         result = agent.run(query, images=images)
         print(json.dumps(result, ensure_ascii=False, indent=2))
     finally:

@@ -11,7 +11,20 @@ pip install -r requirements.txt
 Copy-Item .env.example .env
 ```
 
-Edit `.env` with a valid Qwen/DashScope key before testing Agent, embedding, image, or speech features.
+Edit `.env` with valid keys before testing Agent, embedding, image, or speech features.
+
+**重要提醒（2026-08-12 结构与命名收口后）：**
+`.env` 现在使用通用变量名。至少需要配置：
+
+```env
+LLM_API_KEY="你的真实key"
+LLM_BASE_URL="https://dashscope.aliyuncs.com/compatible-mode/v1"
+LLM_MODEL="qwen-vl-plus-latest"
+EMBEDDING_API_KEY="你的真实key"
+TTS_API_KEY="你的真实key"
+```
+
+旧的 `QWEN_*` 变量不再被读取。如果没有配置上述变量，LLM / Embedding / TTS 都会在启动时报明确的配置缺失错误。
 
 ## Start The App
 
@@ -28,6 +41,7 @@ Troubleshooting:
 
 - If dependencies are missing, rerun `pip install -r requirements.txt`.
 - If the port is busy, stop the existing process or run Uvicorn on another port.
+- If you see `LLM_API_KEY is not configured`, check that `.env` has the new generic variable names.
 
 ## Health Check
 
@@ -144,9 +158,131 @@ Before and after every feature change, run at least:
 
 Do not treat pytest as the primary acceptance signal for this project. Manual behavior must match the requested feature.
 
-## 模型配置通用化测试
+---
 
-本测试验证新的通用环境变量（`LLM_*` / `EMBEDDING_*` / `TTS_*`）和旧的 `QWEN_*` 变量都能正常工作。
+## 结构与命名收口测试（2026-08-12）
+
+本测试验证文件移动、类名重命名、import 同步后应用仍能正常运行。
+
+### 前置条件
+
+1. 完成 Environment Setup。
+2. `.env` 中使用新的通用变量名（`LLM_*` / `EMBEDDING_*` / `TTS_*`），不要使用旧的 `QWEN_*` 变量。
+3. 确认 `requirements.txt` 中的依赖已安装。
+
+---
+
+### 测试 1：启动服务
+
+```powershell
+cd E:\patient-Agent\Agent
+python -m uvicorn app.main:app --reload
+```
+
+预期：
+- 服务在 `http://127.0.0.1:8000` 启动。
+- 终端不出现 `ImportError` 或 `ModuleNotFoundError`。
+- 终端不出现 `LLM_API_KEY is not configured` 等配置缺失错误（前提是 `.env` 已正确配置）。
+
+---
+
+### 测试 2：健康检查
+
+打开：
+
+```text
+http://127.0.0.1:8000/api/health
+```
+
+预期返回：
+
+```json
+{"status":"ok"}
+```
+
+---
+
+### 测试 3：Query 页面测试
+
+打开：
+
+```text
+http://127.0.0.1:8000/query
+```
+
+输入：
+
+```text
+我是王建国，编号是P0003，手机号是13800000003，请帮我查询最近一次就诊记录。
+```
+
+预期：
+- 页面正常返回回答。
+- 不出现 import error 或 500 错误。
+- 回答内容基于工具结果，不编造患者记录。
+
+---
+
+### 测试 4：Chat 页面测试
+
+打开：
+
+```text
+http://127.0.0.1:8000/chat
+```
+
+输入：
+
+```text
+我是王建国，编号是P0003，手机号是13800000003，请帮我总结最近的复诊情况。
+```
+
+预期：
+- 页面正常返回回答。
+- 不出现 import error 或 500 错误。
+
+---
+
+### 测试 5：脚本测试
+
+```powershell
+python scripts/test_qwen_agent.py "我是王建国，编号是P0003，手机号是13800000003，请查询最近一次就诊记录"
+```
+
+预期：
+- 输出 JSON，包含 `answer` 和 `tool_outputs`。
+- 脚本不报 `ImportError` 或 `ModuleNotFoundError`。
+
+---
+
+### 测试 6：语音测试
+
+在 `/query` 或 `/chat` 页面选择一个音色（不要选 none），提交查询。
+
+预期：
+- 返回的响应中包含 `speech_download_url`。
+- 浏览器能播放生成的音频。
+
+---
+
+### 验收标准
+
+| # | 标准 | 测试 |
+|---|---|---|
+| 1 | 服务能正常启动，无 import error | 1 |
+| 2 | `/api/health` 返回 `{"status":"ok"}` | 2 |
+| 3 | `/query` 页面 Agent 查询正常工作 | 3 |
+| 4 | `/chat` 页面 Agent 查询正常工作 | 4 |
+| 5 | `test_qwen_agent.py` 脚本正常运行 | 5 |
+| 6 | 选择语音播报时 TTS 能生成可播放的音频 | 6 |
+| 7 | 业务代码中不再出现 `qwen_client`、`qwen_mcp_agent`、`qwen_speech_client`、`QwenClient`、`QwenMCPAgent`、`QwenSpeechClient` 引用 | grep 验证 |
+| 8 | 无 `__pycache__`、`*.pyc`、`__MACOSX`、`.DS_Store` 被纳入变更 | git status 验证 |
+
+---
+
+## 模型配置通用化测试（已废弃）
+
+以下测试针对 2026-08-11 的变更 2（模型配置通用化）。变更 3（结构与命名收口）后 `.env` 不再支持 `QWEN_*` 回退，这些测试仅作为历史参考保留。
 
 ### 前置条件
 

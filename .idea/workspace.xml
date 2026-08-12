@@ -1,0 +1,114 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="ChangeListManager">
+    <list default="true" id="e93127de-e48d-462a-9c80-c6ce1051eb80" name="更改" comment="">
+      <change beforePath="$PROJECT_DIR$/Agent/.env.example" beforeDir="false" afterPath="$PROJECT_DIR$/Agent/.env.example" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Agent/app/__init__.py" beforeDir="false" afterPath="$PROJECT_DIR$/Agent/app/__init__.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Agent/app/api/__init__.py" beforeDir="false" afterPath="$PROJECT_DIR$/Agent/app/api/__init__.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Agent/app/api/routes.py" beforeDir="false" afterPath="$PROJECT_DIR$/Agent/app/api/routes.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Agent/app/db/__init__.py" beforeDir="false" afterPath="$PROJECT_DIR$/Agent/app/db/__init__.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Agent/app/db/base.py" beforeDir="false" afterPath="$PROJECT_DIR$/Agent/app/db/base.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Agent/app/db/init_db.py" beforeDir="false" afterPath="$PROJECT_DIR$/Agent/app/db/init_db.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Agent/app/db/models.py" beforeDir="false" afterPath="$PROJECT_DIR$/Agent/app/db/models.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Agent/app/db/session.py" beforeDir="false" afterPath="$PROJECT_DIR$/Agent/app/db/session.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Agent/app/env.py" beforeDir="false" afterPath="$PROJECT_DIR$/Agent/app/env.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Agent/app/llm/__init__.py" beforeDir="false" afterPath="$PROJECT_DIR$/Agent/app/llm/__init__.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Agent/app/llm/qwen_client.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/Agent/app/llm/qwen_mcp_agent.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/Agent/app/llm/qwen_speech_client.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/Agent/app/main.py" beforeDir="false" afterPath="$PROJECT_DIR$/Agent/app/main.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Agent/app/mcp_server.py" beforeDir="false" afterPath="$PROJECT_DIR$/Agent/app/mcp_server.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Agent/app/schemas/__init__.py" beforeDir="false" afterPath="$PROJECT_DIR$/Agent/app/schemas/__init__.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Agent/app/schemas/agent.py" beforeDir="false" afterPath="$PROJECT_DIR$/Agent/app/schemas/agent.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Agent/app/schemas/medical_case.py" beforeDir="false" afterPath="$PROJECT_DIR$/Agent/app/schemas/medical_case.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Agent/app/schemas/memory.py" beforeDir="false" afterPath="$PROJECT_DIR$/Agent/app/schemas/memory.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Agent/app/schemas/memory_preference.py" beforeDir="false" afterPath="$PROJECT_DIR$/Agent/app/schemas/memory_preference.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Agent/app/schemas/patient.py" beforeDir="false" afterPath="$PROJECT_DIR$/Agent/app/schemas/patient.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Agent/app/schemas/visit_record.py" beforeDir="false" afterPath="$PROJECT_DIR$/Agent/app/schemas/visit_record.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Agent/app/services/conversation_memory_service.py" beforeDir="false" afterPath="$PROJECT_DIR$/Agent/app/services/conversation_memory_service.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Agent/app/services/identity_service.py" beforeDir="false" afterPath="$PROJECT_DIR$/Agent/app/services/identity_service.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Agent/app/services/mcp_tool_service.py" beforeDir="false" afterPath="$PROJECT_DIR$/Agent/app/services/mcp_tool_service.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Agent/app/services/medical_case_service.py" beforeDir="false" afterPath="$PROJECT_DIR$/Agent/app/services/medical_case_service.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Agent/app/services/memory_preference_service.py" beforeDir="false" afterPath="$PROJECT_DIR$/Agent/app/services/memory_preference_service.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Agent/app/services/memory_service.py" beforeDir="false" afterPath="$PROJECT_DIR$/Agent/app/services/memory_service.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Agent/app/services/memory_vector_service.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/Agent/app/services/patient_service.py" beforeDir="false" afterPath="$PROJECT_DIR$/Agent/app/services/patient_service.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Agent/app/services/visit_record_service.py" beforeDir="false" afterPath="$PROJECT_DIR$/Agent/app/services/visit_record_service.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Agent/docs/interview-review-agent-architecture.md" beforeDir="false" afterPath="$PROJECT_DIR$/Agent/docs/interview-review-agent-architecture.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Agent/docs/prd-patient-agent.md" beforeDir="false" afterPath="$PROJECT_DIR$/Agent/docs/prd-patient-agent.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Agent/scripts/seed_demo_data.sql" beforeDir="false" afterPath="$PROJECT_DIR$/Agent/scripts/seed_demo_data.sql" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Agent/scripts/test_qwen_agent.py" beforeDir="false" afterPath="$PROJECT_DIR$/Agent/scripts/test_qwen_agent.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/DEV_LOG.md" beforeDir="false" afterPath="$PROJECT_DIR$/DEV_LOG.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/DEV_STATUS.md" beforeDir="false" afterPath="$PROJECT_DIR$/DEV_STATUS.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/MANUAL_TESTS.md" beforeDir="false" afterPath="$PROJECT_DIR$/MANUAL_TESTS.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/__MACOSX/Agent/._.DS_Store" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/__MACOSX/Agent/._.env.example" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/__MACOSX/Agent/._.idea" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/__MACOSX/Agent/._data" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/__MACOSX/Agent/.idea/._.gitignore" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/__MACOSX/Agent/.idea/._Agent.iml" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/__MACOSX/Agent/.idea/._inspectionProfiles" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/__MACOSX/Agent/.idea/._misc.xml" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/__MACOSX/Agent/.idea/._modules.xml" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/__MACOSX/Agent/.idea/._workspace.xml" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/__MACOSX/Agent/.idea/inspectionProfiles/._profiles_settings.xml" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/__MACOSX/Agent/app/.___pycache__" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/__MACOSX/Agent/app/api/.___pycache__" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/__MACOSX/Agent/app/db/.___pycache__" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/__MACOSX/Agent/app/llm/.___pycache__" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/__MACOSX/Agent/app/schemas/.___pycache__" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/__MACOSX/Agent/app/services/.___pycache__" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/__MACOSX/Agent/data/._.DS_Store" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/__MACOSX/Agent/data/._faiss" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/__MACOSX/Agent/data/._generated_audio" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/__MACOSX/Agent/data/._patient_agent.db" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/__MACOSX/Agent/data/faiss/._patient_3.index" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/__MACOSX/Agent/data/faiss/._patient_3.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/__MACOSX/Agent/data/generated_audio/._speech_0e8e67a9fcf64341abab2289015c1573.mp3" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/__MACOSX/Agent/data/generated_audio/._speech_2ce7a3b1cb5d4ff3b57d33eec310ec8c.mp3" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/__MACOSX/Agent/data/generated_audio/._speech_3a18fcba865948c69af58b8ff9f953e1.mp3" beforeDir="false" />
+    </list>
+    <option name="SHOW_DIALOG" value="false" />
+    <option name="HIGHLIGHT_CONFLICTS" value="true" />
+    <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
+    <option name="LAST_RESOLUTION" value="IGNORE" />
+  </component>
+  <component name="Git.Settings">
+    <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$" />
+  </component>
+  <component name="ProjectColorInfo"><![CDATA[{
+  "associatedIndex": 1
+}]]></component>
+  <component name="ProjectId" id="3Ho5Kn6Z1o305MigZv2F5jKM9ZF" />
+  <component name="ProjectViewState">
+    <option name="hideEmptyMiddlePackages" value="true" />
+    <option name="showLibraryContents" value="true" />
+  </component>
+  <component name="PropertiesComponent"><![CDATA[{
+  "keyToString": {
+    "ModuleVcsDetector.initialDetectionPerformed": "true",
+    "RunOnceActivity.ShowReadmeOnStart": "true",
+    "RunOnceActivity.TerminalTabsStorage.copyFrom.TerminalArrangementManager.252": "true",
+    "RunOnceActivity.git.unshallow": "true",
+    "ignore.virus.scanning.warn.message": "true",
+    "last_opened_file_path": "E:/patient-Agent"
+  }
+}]]></component>
+  <component name="SharedIndexes">
+    <attachedChunks>
+      <set>
+        <option value="bundled-python-sdk-2653e85de345-6d6dccd035ac-com.jetbrains.pycharm.pro.sharedIndexes.bundled-PY-253.31033.139" />
+      </set>
+    </attachedChunks>
+  </component>
+  <component name="TaskManager">
+    <task active="true" id="Default" summary="默认任务">
+      <changelist id="e93127de-e48d-462a-9c80-c6ce1051eb80" name="更改" comment="" />
+      <created>1786521521649</created>
+      <option name="number" value="Default" />
+      <option name="presentableId" value="Default" />
+      <updated>1786521521649</updated>
+    </task>
+    <servers />
+  </component>
+</project>
