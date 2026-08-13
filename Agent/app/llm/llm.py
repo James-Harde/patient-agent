@@ -5,7 +5,7 @@ Uses ``llm_env`` for all configuration — no provider-specific defaults.
 """
 
 import json
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterator, List, Optional
 
 from openai import OpenAI
 
@@ -96,3 +96,27 @@ class LLMClient:
             "content": message.content or "",
             "raw_response": response.model_dump(),
         }
+
+    def stream_complete(
+        self,
+        messages: List[Dict[str, Any]],
+        temperature: float = 0,
+    ) -> Iterator[str]:
+        """Stream text deltas from a plain chat-completion request."""
+        response = self.client.chat.completions.create(
+            model=self.model,
+            messages=messages,
+            temperature=temperature,
+            stream=True,
+        )
+        try:
+            for chunk in response:
+                if not chunk.choices:
+                    continue
+                content = chunk.choices[0].delta.content
+                if content:
+                    yield content
+        finally:
+            close = getattr(response, "close", None)
+            if callable(close):
+                close()

@@ -12,7 +12,7 @@ import base64
 import json
 import mimetypes
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, Generator, List, Optional
 
 from sqlalchemy.orm import Session
 
@@ -67,6 +67,13 @@ FINALIZER_PROMPT = """
 
 MAX_TOOL_STEPS = 6
 PLAN_TEMPERATURES = [0.1, 0.4, 0.7]
+TOOL_DISPLAY_NAMES = {
+    "verify_patient_identity": "验证患者身份",
+    "get_patient_profile": "查询患者资料",
+    "get_patient_medical_cases": "查询病例信息",
+    "get_patient_visit_records": "查询就诊记录",
+}
+UNKNOWN_TOOL_DISPLAY_NAME = "调用业务工具"
 
 
 class PatientAgent:
@@ -93,6 +100,77 @@ class PatientAgent:
         debug_planner: bool = False,
         memory_context: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
+        execution = self._consume_execution(
+            self._execute(
+                user_query=user_query,
+                images=images,
+                memory_context=memory_context,
+            )
+        )
+        answer = self._finalize_answer(
+            user_query=user_query,
+            execution_plan=execution["execution_plan"],
+            draft_answer=execution["draft_answer"],
+            tool_outputs=execution["tool_outputs"],
+            has_images=execution["has_images"],
+        )
+        return self._build_result(
+            answer=answer,
+            execution=execution,
+            debug_planner=debug_planner,
+        )
+
+    def run_stream(
+        self,
+        user_query: str,
+        images: Optional[List[Dict[str, Any]]] = None,
+        debug_planner: bool = False,
+        memory_context: Optional[Dict[str, Any]] = None,
+    ) -> Generator[Dict[str, Any], None, Dict[str, Any]]:
+        """Yield public execution events and return the completed Agent result."""
+        execution_stream = self._execute(
+            user_query=user_query,
+            images=images,
+            memory_context=memory_context,
+        )
+        while True:
+            try:
+                status_event = next(execution_stream)
+            except StopIteration as stop:
+                execution = stop.value
+                break
+            yield {"event": "status", "data": status_event}
+
+        yield {"event": "status", "data": {"stage": "generating"}}
+        answer_parts: List[str] = []
+        for text in self._stream_finalize_answer(
+            user_query=user_query,
+            execution_plan=execution["execution_plan"],
+            draft_answer=execution["draft_answer"],
+            tool_outputs=execution["tool_outputs"],
+            has_images=execution["has_images"],
+        ):
+            answer_parts.append(text)
+            yield {"event": "delta", "data": {"text": text}}
+
+        answer = "".join(answer_parts) or execution["draft_answer"]
+        return self._build_result(
+            answer=answer,
+            execution=execution,
+            debug_planner=debug_planner,
+        )
+
+    # ------------------------------------------------------------------
+    # Shared execution loop
+    # ------------------------------------------------------------------
+
+    def _execute(
+        self,
+        user_query: str,
+        images: Optional[List[Dict[str, Any]]],
+        memory_context: Optional[Dict[str, Any]],
+    ) -> Generator[Dict[str, Any], None, Dict[str, Any]]:
+        yield {"stage": "planning"}
         execution_plan, planner_debug = self._build_execution_plan(
             user_query=user_query,
             has_images=bool(images),
@@ -123,60 +201,75 @@ class PatientAgent:
                     handler = self.tools.get(tool_call["name"])
                     if handler is None:
                         continue
-                    result = handler(**tool_call["arguments"])
-                    tool_outputs.append(
-                        {
-                            "tool_name": tool_call["name"],
-                            "arguments": tool_call["arguments"],
-                            "result": result,
-                        }
-                    )
-                    tool_steps += 1
-                    messages.append(
-                        {
-                            "role": "tool",
-                            "tool_call_id": tool_call["id"],
-                            "name": tool_call["name"],
-                            "content": json.dumps(result, ensure_ascii=False),
-                        }
-                    )
+                    display_name = self._tool_display_name(tool_call["name"])
+                    yield {"stage": "tool", "status": "started", "name": display_name}
+                    try:
+                        result = handler(**tool_call["arguments"])
+                        tool_outputs.append(
+                            {
+                                "tool_name": tool_call["name"],
+                                "arguments": tool_call["arguments"],
+                                "result": result,
+                            }
+                        )
+                        tool_steps += 1
+                        messages.append(
+                            {
+                                "role": "tool",
+                                "tool_call_id": tool_call["id"],
+                                "name": tool_call["name"],
+                                "content": json.dumps(result, ensure_ascii=False),
+                            }
+                        )
+                    except Exception:
+                        yield {"stage": "tool", "status": "failed", "name": display_name}
+                        raise
+                    yield {"stage": "tool", "status": "completed", "name": display_name}
                 continue
 
-            answer = self._finalize_answer(
-                user_query=user_query,
-                execution_plan=execution_plan,
-                draft_answer=response["content"] or "",
-                tool_outputs=tool_outputs,
-                has_images=bool(images),
-            )
             return {
-                "answer": answer,
+                "execution_plan": execution_plan,
+                "draft_answer": response["content"] or "",
                 "tool_outputs": tool_outputs,
-                "planner_debug": (
-                    self._build_runtime_planner_debug(
-                        planner_debug=planner_debug,
-                        execution_plan=execution_plan,
-                        tool_outputs=tool_outputs,
-                    )
-                    if debug_planner
-                    else None
-                ),
+                "planner_debug": planner_debug,
+                "has_images": bool(images),
             }
 
         return {
-            "answer": self._finalize_answer(
-                user_query=user_query,
-                execution_plan=execution_plan,
-                draft_answer="",
-                tool_outputs=tool_outputs,
-                has_images=bool(images),
-            ),
+            "execution_plan": execution_plan,
+            "draft_answer": "",
             "tool_outputs": tool_outputs,
+            "planner_debug": planner_debug,
+            "has_images": bool(images),
+        }
+
+    def _consume_execution(
+        self,
+        execution_stream: Generator[Dict[str, Any], None, Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        while True:
+            try:
+                next(execution_stream)
+            except StopIteration as stop:
+                return stop.value
+
+    def _tool_display_name(self, tool_name: str) -> str:
+        return TOOL_DISPLAY_NAMES.get(tool_name, UNKNOWN_TOOL_DISPLAY_NAME)
+
+    def _build_result(
+        self,
+        answer: str,
+        execution: Dict[str, Any],
+        debug_planner: bool,
+    ) -> Dict[str, Any]:
+        return {
+            "answer": answer,
+            "tool_outputs": execution["tool_outputs"],
             "planner_debug": (
                 self._build_runtime_planner_debug(
-                    planner_debug=planner_debug,
-                    execution_plan=execution_plan,
-                    tool_outputs=tool_outputs,
+                    planner_debug=execution["planner_debug"],
+                    execution_plan=execution["execution_plan"],
+                    tool_outputs=execution["tool_outputs"],
                 )
                 if debug_planner
                 else None
@@ -298,6 +391,31 @@ class PatientAgent:
     # Answer finalisation
     # ------------------------------------------------------------------
 
+    def _build_finalizer_messages(
+        self,
+        user_query: str,
+        execution_plan: Dict[str, Any],
+        draft_answer: str,
+        tool_outputs: List[Dict[str, Any]],
+        has_images: bool,
+    ) -> List[Dict[str, Any]]:
+        return [
+            {"role": "system", "content": FINALIZER_PROMPT},
+            {
+                "role": "user",
+                "content": json.dumps(
+                    {
+                        "user_query": user_query,
+                        "has_images": has_images,
+                        "execution_plan": execution_plan,
+                        "draft_answer": draft_answer,
+                        "tool_outputs": tool_outputs,
+                    },
+                    ensure_ascii=False,
+                ),
+            },
+        ]
+
     def _finalize_answer(
         self,
         user_query: str,
@@ -307,25 +425,35 @@ class PatientAgent:
         has_images: bool,
     ) -> str:
         response = self.llm_client.complete(
-            messages=[
-                {"role": "system", "content": FINALIZER_PROMPT},
-                {
-                    "role": "user",
-                    "content": json.dumps(
-                        {
-                            "user_query": user_query,
-                            "has_images": has_images,
-                            "execution_plan": execution_plan,
-                            "draft_answer": draft_answer,
-                            "tool_outputs": tool_outputs,
-                        },
-                        ensure_ascii=False,
-                    ),
-                },
-            ],
+            messages=self._build_finalizer_messages(
+                user_query=user_query,
+                execution_plan=execution_plan,
+                draft_answer=draft_answer,
+                tool_outputs=tool_outputs,
+                has_images=has_images,
+            ),
             temperature=0,
         )
         return response["content"] or draft_answer
+
+    def _stream_finalize_answer(
+        self,
+        user_query: str,
+        execution_plan: Dict[str, Any],
+        draft_answer: str,
+        tool_outputs: List[Dict[str, Any]],
+        has_images: bool,
+    ) -> Generator[str, None, None]:
+        yield from self.llm_client.stream_complete(
+            messages=self._build_finalizer_messages(
+                user_query=user_query,
+                execution_plan=execution_plan,
+                draft_answer=draft_answer,
+                tool_outputs=tool_outputs,
+                has_images=has_images,
+            ),
+            temperature=0,
+        )
 
     # ------------------------------------------------------------------
     # Memory context helpers

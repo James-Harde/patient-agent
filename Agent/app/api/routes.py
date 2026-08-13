@@ -8,11 +8,12 @@ from typing import Optional
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi.responses import StreamingResponse
 from openai import BadRequestError
 from sqlalchemy.orm import Session
 
 from app.db.session import DATA_DIR
-from app.db.session import get_db
+from app.db.session import SessionLocal, get_db
 from app.llm.llm import LLMClient
 from app.llm.speech_client import SpeechClient
 from app.orchestration.patient_agent import PatientAgent
@@ -210,6 +211,104 @@ def _build_memory_context(db: Session, patient, query: str) -> dict:
     }
 
 
+def _add_speech_to_agent_result(
+    request: Request,
+    payload: AgentQueryRequest,
+    result: dict,
+    speech_client: Optional[SpeechClient],
+) -> None:
+    if not payload.enable_speech or speech_client is None:
+        return
+
+    speech_result = speech_client.synthesize(
+        result["answer"],
+        voice=payload.speech_voice,
+        audio_format=payload.speech_format,
+    )
+    speech_file_path, speech_download_url = _save_speech_audio(
+        speech_result["audio_base64"],
+        speech_result["mime_type"],
+    )
+    result.update(
+        {
+            "speech_mime_type": speech_result["mime_type"],
+            "speech_model": speech_result["model"],
+            "speech_voice": speech_result["voice"],
+            "speech_file_path": speech_file_path,
+            "speech_download_url": str(request.base_url).rstrip("/") + speech_download_url,
+        }
+    )
+
+
+def _save_agent_conversation(
+    db: Session,
+    payload: AgentQueryRequest,
+    result: dict,
+) -> None:
+    patient = _resolve_patient_from_agent_result(db, payload.query, result)
+    if patient is None:
+        return
+
+    memory_session_id = f"agent-{uuid4().hex}"
+    conversation_memory_service.create_conversation_memory(
+        db,
+        ConversationMemoryCreate(
+            patient_id=patient.id,
+            session_id=memory_session_id,
+            role="user",
+            content=payload.query,
+            multimodal_payload=_build_user_multimodal_payload(payload),
+        ),
+    )
+    conversation_memory_service.create_conversation_memory(
+        db,
+        ConversationMemoryCreate(
+            patient_id=patient.id,
+            session_id=memory_session_id,
+            role="assistant",
+            content=result["answer"],
+            multimodal_payload=_build_assistant_multimodal_payload(result),
+        ),
+    )
+    short_term_count = conversation_memory_service.count_conversation_memories(
+        db,
+        patient_id=patient.id,
+    )
+    if (
+        short_term_count >= SHORT_TERM_TRIGGER_MESSAGE_COUNT
+        and short_term_count % SHORT_TERM_TRIGGER_MESSAGE_COUNT == 0
+    ):
+        conversation_texts = memory_service.get_conversation_texts_for_extraction(
+            db=db,
+            patient_id=patient.id,
+            limit=SHORT_TERM_TRIGGER_MESSAGE_COUNT,
+        )
+        memory_events, user_profile = memory_service.refresh_conversation_memory(
+            db=db,
+            patient=patient,
+            conversation_texts=conversation_texts,
+        )
+        logger.info(
+            "Auto extracted long-term conversation memory for patient_id=%s short_term_count=%s event_count=%s profile_updated=%s",
+            patient.id,
+            short_term_count,
+            len(memory_events),
+            user_profile is not None,
+        )
+
+
+def _format_sse_event(event: str, data: dict) -> str:
+    return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
+def _stream_error_message(exc: Exception) -> str:
+    if isinstance(exc, BadRequestError):
+        return "请求内容无法处理，请检查输入后重试。"
+    if isinstance(exc, ValueError):
+        return "服务配置暂不可用，请联系管理员。"
+    return "生成回答时发生错误，请稍后重试。"
+
+
 @router.get("/health")
 def health_check() -> dict[str, str]:
     return {"status": "ok"}
@@ -262,81 +361,78 @@ def agent_query(
             detail=str(exc),
         )
 
-    if payload.enable_speech and speech_client is not None:
-        try:
-            speech_result = speech_client.synthesize(
-                result["answer"],
-                voice=payload.speech_voice,
-                audio_format=payload.speech_format,
-            )
-        except (BadRequestError, ValueError) as exc:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=str(exc),
-            )
-        speech_file_path, speech_download_url = _save_speech_audio(
-            speech_result["audio_base64"],
-            speech_result["mime_type"],
-        )
-        result.update(
-            {
-                "speech_mime_type": speech_result["mime_type"],
-                "speech_model": speech_result["model"],
-                "speech_voice": speech_result["voice"],
-                "speech_file_path": speech_file_path,
-                "speech_download_url": str(request.base_url).rstrip("/") + speech_download_url,
-            }
+    try:
+        _add_speech_to_agent_result(request, payload, result, speech_client)
+    except (BadRequestError, ValueError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
         )
 
-    patient = _resolve_patient_from_agent_result(db, payload.query, result)
-    if patient is not None:
-        memory_session_id = f"agent-{uuid4().hex}"
-        conversation_memory_service.create_conversation_memory(
-            db,
-            ConversationMemoryCreate(
-                patient_id=patient.id,
-                session_id=memory_session_id,
-                role="user",
-                content=payload.query,
-                multimodal_payload=_build_user_multimodal_payload(payload),
-            ),
-        )
-        conversation_memory_service.create_conversation_memory(
-            db,
-            ConversationMemoryCreate(
-                patient_id=patient.id,
-                session_id=memory_session_id,
-                role="assistant",
-                content=result["answer"],
-                multimodal_payload=_build_assistant_multimodal_payload(result),
-            ),
-        )
-        short_term_count = conversation_memory_service.count_conversation_memories(
-            db,
-            patient_id=patient.id,
-        )
-        if (
-            short_term_count >= SHORT_TERM_TRIGGER_MESSAGE_COUNT
-            and short_term_count % SHORT_TERM_TRIGGER_MESSAGE_COUNT == 0
-        ):
-            conversation_texts = memory_service.get_conversation_texts_for_extraction(
-                db=db,
-                patient_id=patient.id,
-                limit=SHORT_TERM_TRIGGER_MESSAGE_COUNT,
-            )
-            memory_events, user_profile = memory_service.refresh_conversation_memory(
-                db=db,
-                patient=patient,
-                conversation_texts=conversation_texts,
-            )
-            logger.info(
-                "Auto extracted long-term conversation memory for patient_id=%s short_term_count=%s event_count=%s profile_updated=%s",
-                patient.id,
-                short_term_count,
-                len(memory_events),
-                user_profile is not None,
-            )
+    _save_agent_conversation(db, payload, result)
     return AgentQueryResponse(**result)
+
+
+@router.post(
+    "/agent/query/stream",
+    tags=["Agent"],
+    summary="流式调用 Agent 查询患者信息",
+    description=(
+        "通过 SSE 返回规划、工具调用、模型文本增量和最终结果。"
+        "请求体与主问答接口相同，适用于需要逐段展示回答的客户端。"
+    ),
+)
+def agent_query_stream(
+    request: Request,
+    payload: AgentQueryRequest,
+) -> StreamingResponse:
+    def event_stream():
+        db = SessionLocal()
+        try:
+            llm_client = LLMClient()
+            speech_client = SpeechClient() if payload.enable_speech else None
+            pre_resolved_patient = _resolve_patient_from_agent_result(
+                db,
+                payload.query,
+                {"tool_outputs": []},
+            )
+            memory_context = None
+            if pre_resolved_patient is not None:
+                memory_context = _build_memory_context(db, pre_resolved_patient, payload.query)
+
+            agent = PatientAgent(db=db, llm_client=llm_client)
+            agent_stream = agent.run_stream(
+                payload.query,
+                images=[image.model_dump() for image in payload.images],
+                debug_planner=False,
+                memory_context=memory_context,
+            )
+            while True:
+                try:
+                    agent_event = next(agent_stream)
+                except StopIteration as stop:
+                    result = stop.value
+                    break
+                yield _format_sse_event(agent_event["event"], agent_event["data"])
+
+            _add_speech_to_agent_result(request, payload, result, speech_client)
+            _save_agent_conversation(db, payload, result)
+            response_data = AgentQueryResponse(**result).model_dump(mode="json")
+            yield _format_sse_event("done", response_data)
+        except Exception as exc:
+            logger.error("Streaming agent query failed (%s)", type(exc).__name__)
+            yield _format_sse_event("error", {"message": _stream_error_message(exc)})
+        finally:
+            db.close()
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @router.get(

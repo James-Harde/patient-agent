@@ -446,6 +446,75 @@ input[type="file"]:focus,
   color: var(--accent-strong);
 }
 
+.execution-step-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.execution-step {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  color: var(--muted);
+  font-size: 0.92rem;
+}
+
+.execution-step-marker {
+  width: 9px;
+  height: 9px;
+  flex: 0 0 9px;
+  border-radius: 50%;
+  background: rgba(23, 33, 33, 0.28);
+}
+
+.execution-step.in-progress {
+  color: #8a5b07;
+}
+
+@keyframes breathe {
+  0%, 100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.55;
+    transform: scale(1.35);
+  }
+}
+
+.execution-step.in-progress .execution-step-marker {
+  background: #e6ac4b;
+  box-shadow: 0 0 0 4px rgba(230, 172, 75, 0.16);
+  animation: breathe 1.6s ease-in-out infinite;
+}
+
+.execution-step-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.execution-step-subtext {
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+
+.execution-step.completed .execution-step-marker {
+  background: var(--accent);
+}
+
+.execution-step.failed {
+  color: #991b1b;
+}
+
+.execution-step.failed .execution-step-marker {
+  background: #b91c1c;
+}
+
 .message-meta pre {
   margin: 10px 0 0;
   padding: 14px;
