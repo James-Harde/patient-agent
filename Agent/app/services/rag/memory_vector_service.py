@@ -1,4 +1,4 @@
-# 作者：小红书@人间清醒的李某人
+
 """FAISS-based vector storage for memory events.
 
 Uses ``llm_env`` for all embedding configuration.  The index engine is

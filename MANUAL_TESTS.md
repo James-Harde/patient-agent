@@ -735,3 +735,206 @@ curl.exe -X POST "http://127.0.0.1:8000/api/agent/query" `
 | 清空后立即发起新一轮 | 待人工验收 | 重点观察旧事件和旧 finally 不影响第二轮 |
 | 正常请求回归 | 待人工验收 | 重点观察计时、动画、流式文本和完成折叠 |
 | Query 回归 | 待人工验收 | 重点确认仍为非流式普通接口 |
+
+---
+
+## LangGraph 等价迁移测试（2026-08-13，等待人工验收）
+
+本节验证 `PatientAgent` 内部手写 `while` 工具循环替换为 LangGraph `StateGraph` 后，对外行为与迁移前一致。迁移只改编排层，Prompt、工具、模型、记忆、TTS 和前端均未改。观察流式行为时声音选择“无”。
+
+### 前置条件
+
+1. 安装依赖（新增 `langgraph`）：
+
+   ```powershell
+   pip install -r requirements.txt
+   ```
+
+2. 配置有效的 `LLM_*`（测试语音时还需 `TTS_*`）。
+3. 在 `E:\patient-Agent\Agent` 启动服务：
+
+   ```powershell
+   python -m uvicorn app.main:app --reload
+   ```
+
+### 测试 1：启动与健康检查
+
+打开：
+
+```text
+http://127.0.0.1:8000/api/health
+```
+
+预期：
+
+- 终端不出现 `ImportError` / `ModuleNotFoundError`（尤其是 `langgraph`）。
+- 返回 `{"status":"ok"}`。
+
+### 测试 2：非流式回归
+
+打开 `http://127.0.0.1:8000/query`，输入：
+
+```text
+我是王建国，编号是 P0003，手机号是 13800000003，请查询最近一次就诊记录并总结重点。
+```
+
+预期：
+
+- 仍调用 `POST /api/agent/query`，一次返回完整 JSON。
+- 工具结果与回答行为与迁移前一致，不编造患者记录。
+
+### 测试 3：SSE 无工具
+
+打开 `http://127.0.0.1:8000/chat`，声音选择“无”，输入：
+
+```text
+高血压日常注意事项
+```
+
+预期：
+
+- 事件顺序为 `planning` → `generating` → 多个 `delta` → `done`。
+- 回答逐段出现，无工具事件。
+
+### 测试 4：SSE 工具调用
+
+在 `/chat` 输入：
+
+```text
+我是王建国，编号是 P0003，手机号是 13800000003，请查询最近一次就诊记录并总结重点。
+```
+
+预期：
+
+- 真实显示身份验证、记录查询的开始/完成状态，顺序为 `planning` → 工具 `started`/`completed` → `generating` → `delta` → `done`。
+- 结果基于真实工具返回，不编造，SSE 不泄露工具参数、原始结果、Prompt、Planner 内容或思维链。
+
+### 测试 5：主动取消
+
+在回答过程中点击“清空会话”，随后立即发送新问题。
+
+预期：
+
+- 清空后立即空闲，旧请求不能重新写回；新问题不串轮，行为与迁移前一致。
+
+### 测试 6：图片与 TTS
+
+分别上传图片、选择一个音色（非 none）发送问题。
+
+预期：
+
+- 图片预览与模型回答正常；TTS 仍返回 `speech_download_url`，音频可播放。
+
+### 验收记录
+
+| 测试 | 结果 | 备注 |
+|---|---|---|
+| 启动与健康检查 | 待人工验收 | 重点检查 langgraph 可导入 |
+| 非流式回归 | 待人工验收 | 重点检查 `/query` 行为与迁移前一致 |
+| SSE 无工具 | 待人工验收 | 重点检查 planning → generating → delta → done |
+| SSE 工具调用 | 待人工验收 | 重点检查真实开始/完成状态且不泄露敏感信息 |
+| 主动取消 | 待人工验收 | 重点检查清空后空闲、不串轮 |
+| 图片与 TTS | 待人工验收 | 重点检查图片与语音不受影响 |
+
+---
+
+## MCP 工具层一期测试（2026-08-13，等待人工验收）
+
+本节验证 `PatientAgent` 已改为通过真实 MCP client/server 协议（本地 stdio `app.mcp_server`）调用四个业务工具，取代对 `mcp_tool_service` 的直接调用。观察流式行为时声音选择“无”。
+
+### 前置条件
+
+1. 确认依赖安装：`mcp` 版本满足 `>=1.12.0,<2.0.0`（当前环境 `mcp 1.12.4`），`langgraph 1.2.11` 可导入。
+2. 本仓库当前唯一的虚拟环境是仓库根目录的 `.venv312`（`E:\patient-Agent\.venv312`）；以下命令从 `E:\patient-Agent\Agent` 运行，解释器用 `..\.venv312\Scripts\python.exe`。
+3. 无需手工启动第二个服务、不占用新端口：`MCPToolClient` 会通过 `sys.executable -m app.mcp_server` 自行拉起并关闭 stdio 子进程。
+
+### 测试 1：MCP 工具发现
+
+在 `E:\patient-Agent\Agent` 运行一行 Python 命令：
+
+```powershell
+..\.venv312\Scripts\python.exe -c "from app.mcp_client import MCPToolClient; print([t['name'] for t in MCPToolClient().list_tools()])"
+```
+
+预期：
+
+- 恰好返回四个白名单工具（顺序不保证）：
+
+  ```text
+  ['verify_patient_identity', 'get_patient_profile', 'get_patient_medical_cases', 'get_patient_visit_records']
+  ```
+
+- 每个工具的 schema 为普通 JSON Schema（`type`/`properties`/`required`），不含 `anyOf`/`title`/`default`；例如 `verify_patient_identity` 的 `required` 为 `["patient_code"]`，`get_patient_visit_records` 含可选 `limit`（integer）。
+- 终端会出现类似 `Processing request of type ListToolsRequest` 的 server 日志，证明发现经过 MCP server。
+
+### 测试 2：MCP 单工具调用
+
+```powershell
+..\.venv312\Scripts\python.exe -c "import json; from app.mcp_client import MCPToolClient; print(json.dumps(MCPToolClient().call_tool('verify_patient_identity', {'patient_code':'P0003','phone':'13800000003'}), ensure_ascii=False))"
+```
+
+预期：
+
+- 返回结构化 dict，例如：
+
+  ```json
+  {"verified": true, "reason": "ok", "patient": {"id": 3, "patient_code": "P0003", "full_name": "王建国", "gender": "male", "phone_masked": "138****0003", "id_number_masked": "3101********1234"}}
+  ```
+
+- 手机号/身份证以掩码返回，不输出明文。
+- 终端出现 `Processing request of type CallToolRequest` 日志，确认调用经过 MCP 协议而非直接 service。
+- 用白名单外工具名调用（如 `call_tool('not_a_tool', {})`）会抛 `MCPToolError`，且不拉起 server 子进程。
+
+### 测试 3：`/query` 回归
+
+启动服务（见“Start The App”）后打开 `http://127.0.0.1:8000/query`，输入：
+
+```text
+我是王建国，编号是 P0003，手机号是 13800000003，请查询最近一次就诊记录。
+```
+
+预期：
+
+- 仍调用 `POST /api/agent/query`，一次返回完整 JSON。
+- 工具结果与回答行为与迁移前一致，基于真实就诊记录、不编造。
+- `/api/health` 返回 `{"status":"ok"}`，无 import error。
+
+### 测试 4：`/chat` 回归
+
+打开 `http://127.0.0.1:8000/chat`，声音选择“无”，输入同一查询。
+
+预期：
+
+- 事件顺序为 `planning` → 工具 `started`/`completed` → `generating` → 多个 `delta` → `done`。
+- 工具步骤只显示安全中文名称（如“验证患者身份”“查询就诊记录”），不出现内部函数名、手机号、工具参数、原始返回 JSON、Prompt 或 `planner_debug`。
+- 最终回答逐段出现，`done.tool_outputs` 含实际工具结果。
+
+### 测试 5：主动取消
+
+在 `/chat` 回答过程中点击“清空会话”，随后立即发送新问题。
+
+预期：
+
+- 清空后立即空闲，旧请求不写回，旧 `done/error/catch/finally` 不影响新一轮。
+- 行为与迁移前一致（MCP 工具层不改变取消与防竞态逻辑）。
+
+### 测试 6：MCP 异常
+
+在不修改业务数据的前提下模拟 MCP 失败，例如在隔离环境中临时把 `MCPToolClient` 指向一个不存在的 server 模块，或调用白名单外工具名。
+
+预期：
+
+- 显示安全的 `error` 事件，工具步骤标记为 `failed`。
+- 错误信息不泄露患者参数、API Key、完整工具结果或服务端堆栈；日志只记录异常类型。
+- 数据库 Session 正常关闭，后续正常请求仍可用。
+
+### 验收记录
+
+| 测试 | 结果 | 备注 |
+|---|---|---|
+| MCP 工具发现 | 待人工验收 | 重点检查恰好 4 个白名单工具与干净 schema |
+| MCP 单工具调用 | 待人工验收 | 重点检查结构化结果、掩码字段、经过 MCP |
+| `/query` 回归 | 待人工验收 | 重点检查工具结果与迁移前一致 |
+| `/chat` 回归 | 待人工验收 | 重点检查 planning → tool → generating → delta → done |
+| 主动取消 | 待人工验收 | 重点检查清空后空闲、不串轮 |
+| MCP 异常 | 待人工验收 | 重点检查安全 error、步骤失败、不泄露 |

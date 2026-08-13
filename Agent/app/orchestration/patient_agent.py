@@ -1,23 +1,26 @@
-# 作者：小红书@人间清醒的李某人
-"""Hand-written Agent orchestration loop.
 
-.. note::
-    This module currently uses a manual ReAct-style loop with a
-    self-consistency planner.  It will be replaced by a **LangGraph**
-    orchestration graph in a future iteration — the public API
-    (``PatientAgent.run()``) is expected to remain stable.
+"""LangGraph-backed Agent orchestration.
+
+The public API (``PatientAgent.run()`` / ``PatientAgent.run_stream()``) is
+stable.  The internal ReAct-style tool loop is implemented as a LangGraph
+``StateGraph`` with the nodes ``planner``, ``agent_decision``, ``tools`` and
+``finalizer``.  Status events (planning / tool) and final answer deltas are
+emitted as custom stream events, then converted back to the existing SSE event
+shape by ``run_stream()``.
 """
 
 import base64
 import json
 import mimetypes
 from pathlib import Path
-from typing import Any, Callable, Dict, Generator, List, Optional
+from typing import Any, Callable, Dict, Generator, List, Optional, TypedDict
 
+from langgraph.config import get_stream_writer
+from langgraph.graph import END, START, StateGraph
 from sqlalchemy.orm import Session
 
 from app.llm.llm import LLMClient
-from app.services import mcp_tool_service
+from app.mcp_client import MCPToolClient
 
 
 ToolHandler = Callable[..., Dict[str, Any]]
@@ -75,19 +78,57 @@ TOOL_DISPLAY_NAMES = {
 }
 UNKNOWN_TOOL_DISPLAY_NAME = "调用业务工具"
 
+# Tools the Agent may expose and execute via the MCP layer.  Anything outside
+# this allowlist is rejected and never reaches the MCP server.
+MCP_ALLOWED_TOOLS = frozenset(TOOL_DISPLAY_NAMES)
+
+
+class AgentState(TypedDict):
+    """State shared across LangGraph nodes.
+
+    Deliberately excludes the database ``Session``, ``LLMClient`` and API keys
+    — those live on the ``PatientAgent`` instance and are never placed in this
+    state.  No LangGraph checkpointer is enabled, so this state never leaves
+    memory and is never surfaced through the SSE endpoint.
+    """
+
+    # Request inputs
+    user_query: str
+    images: List[Dict[str, Any]]
+    memory_context: Optional[Dict[str, Any]]
+    has_images: bool
+    debug_planner: bool
+    streaming: bool
+
+    # Planner outputs
+    execution_plan: Dict[str, Any]
+    planner_debug: Dict[str, Any]
+
+    # Agent tool loop
+    messages: List[Dict[str, Any]]
+    pending_tool_calls: List[Dict[str, Any]]
+    tool_outputs: List[Dict[str, Any]]
+    tool_steps: int
+
+    # Finalizer
+    draft_answer: str
+    answer: str
+
 
 class PatientAgent:
-    """Hand-written Agent that orchestrates tool calls via an LLM.
+    """Orchestrates tool calls via an LLM using a LangGraph ``StateGraph``.
 
-    This is a temporary implementation.  The long-term plan is to replace
-    the manual loop with a LangGraph state graph while keeping the same
-    ``run()`` signature.
+    ``run()`` (non-streaming) and ``run_stream()`` (streaming) keep their
+    original signatures and return values; only the internal execution loop
+    changed from a hand-written ``while`` loop to graph nodes.
     """
 
     def __init__(self, db: Session, llm_client: LLMClient) -> None:
         self.db = db
         self.llm_client = llm_client
+        self.mcp_client = MCPToolClient()
         self.tools = self._build_tool_registry()
+        self.graph = self._build_graph()
 
     # ------------------------------------------------------------------
     # Public API
@@ -100,23 +141,18 @@ class PatientAgent:
         debug_planner: bool = False,
         memory_context: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        execution = self._consume_execution(
-            self._execute(
+        final_state = self.graph.invoke(
+            self._build_input_state(
                 user_query=user_query,
                 images=images,
                 memory_context=memory_context,
+                debug_planner=debug_planner,
+                streaming=False,
             )
         )
-        answer = self._finalize_answer(
-            user_query=user_query,
-            execution_plan=execution["execution_plan"],
-            draft_answer=execution["draft_answer"],
-            tool_outputs=execution["tool_outputs"],
-            has_images=execution["has_images"],
-        )
         return self._build_result(
-            answer=answer,
-            execution=execution,
+            answer=final_state["answer"],
+            execution=self._execution_from_state(final_state),
             debug_planner=debug_planner,
         )
 
@@ -127,131 +163,223 @@ class PatientAgent:
         debug_planner: bool = False,
         memory_context: Optional[Dict[str, Any]] = None,
     ) -> Generator[Dict[str, Any], None, Dict[str, Any]]:
-        """Yield public execution events and return the completed Agent result."""
-        execution_stream = self._execute(
-            user_query=user_query,
-            images=images,
-            memory_context=memory_context,
-        )
-        while True:
-            try:
-                status_event = next(execution_stream)
-            except StopIteration as stop:
-                execution = stop.value
-                break
-            yield {"event": "status", "data": status_event}
+        """Yield public execution events and return the completed Agent result.
 
-        yield {"event": "status", "data": {"stage": "generating"}}
-        answer_parts: List[str] = []
-        for text in self._stream_finalize_answer(
-            user_query=user_query,
-            execution_plan=execution["execution_plan"],
-            draft_answer=execution["draft_answer"],
-            tool_outputs=execution["tool_outputs"],
-            has_images=execution["has_images"],
+        The graph emits custom events — either status data (``{"stage": ...}``)
+        or answer deltas (``{"text": ...}``) — which are converted here into the
+        existing ``{"event": ..., "data": ...}`` SSE shape.  LangGraph node
+        updates and raw state are never surfaced to the caller.
+        """
+        final_state: Dict[str, Any] = {}
+        for mode, chunk in self.graph.stream(
+            self._build_input_state(
+                user_query=user_query,
+                images=images,
+                memory_context=memory_context,
+                debug_planner=debug_planner,
+                streaming=True,
+            ),
+            stream_mode=["custom", "values"],
         ):
-            answer_parts.append(text)
-            yield {"event": "delta", "data": {"text": text}}
+            if mode == "custom":
+                if "stage" in chunk:
+                    yield {"event": "status", "data": chunk}
+                elif "text" in chunk:
+                    yield {"event": "delta", "data": chunk}
+            elif mode == "values":
+                final_state = chunk
 
-        answer = "".join(answer_parts) or execution["draft_answer"]
         return self._build_result(
-            answer=answer,
-            execution=execution,
+            answer=final_state["answer"],
+            execution=self._execution_from_state(final_state),
             debug_planner=debug_planner,
         )
 
     # ------------------------------------------------------------------
-    # Shared execution loop
+    # LangGraph graph: state helpers, nodes, and routing
     # ------------------------------------------------------------------
 
-    def _execute(
+    def _build_input_state(
         self,
         user_query: str,
         images: Optional[List[Dict[str, Any]]],
         memory_context: Optional[Dict[str, Any]],
-    ) -> Generator[Dict[str, Any], None, Dict[str, Any]]:
-        yield {"stage": "planning"}
+        debug_planner: bool,
+        streaming: bool,
+    ) -> AgentState:
+        return {
+            "user_query": user_query,
+            "images": images or [],
+            "memory_context": memory_context,
+            "has_images": bool(images),
+            "debug_planner": debug_planner,
+            "streaming": streaming,
+            "execution_plan": {},
+            "planner_debug": {},
+            "messages": [],
+            "pending_tool_calls": [],
+            "tool_outputs": [],
+            "tool_steps": 0,
+            "draft_answer": "",
+            "answer": "",
+        }
+
+    def _execution_from_state(self, state: AgentState) -> Dict[str, Any]:
+        return {
+            "execution_plan": state["execution_plan"],
+            "draft_answer": state["draft_answer"],
+            "tool_outputs": state["tool_outputs"],
+            "planner_debug": state["planner_debug"],
+            "has_images": state["has_images"],
+        }
+
+    def _emit_status(self, status: Dict[str, Any]) -> None:
+        get_stream_writer()(status)
+
+    def _emit_delta(self, text: str) -> None:
+        get_stream_writer()({"text": text})
+
+    def _build_graph(self) -> Any:
+        graph = StateGraph(AgentState)
+        graph.add_node("planner", self._planner_node)
+        graph.add_node("agent_decision", self._agent_decision_node)
+        graph.add_node("tools", self._tools_node)
+        graph.add_node("finalizer", self._finalizer_node)
+
+        graph.add_edge(START, "planner")
+        graph.add_edge("planner", "agent_decision")
+        graph.add_conditional_edges(
+            "agent_decision",
+            self._route_after_decision,
+            ["tools", "finalizer"],
+        )
+        graph.add_conditional_edges(
+            "tools",
+            self._route_after_tools,
+            ["agent_decision", "finalizer"],
+        )
+        graph.add_edge("finalizer", END)
+        return graph.compile()
+
+    def _planner_node(self, state: AgentState) -> Dict[str, Any]:
+        if state["streaming"]:
+            self._emit_status({"stage": "planning"})
         execution_plan, planner_debug = self._build_execution_plan(
-            user_query=user_query,
-            has_images=bool(images),
+            user_query=state["user_query"],
+            has_images=state["has_images"],
         )
         messages: List[Dict[str, Any]] = [
             {"role": "system", "content": SYSTEM_PROMPT},
-            *self._build_memory_messages(memory_context),
+            *self._build_memory_messages(state["memory_context"]),
             {
                 "role": "system",
                 "content": self._format_execution_plan(execution_plan),
             },
-            {"role": "user", "content": self._build_user_content(user_query, images or [])},
+            {
+                "role": "user",
+                "content": self._build_user_content(state["user_query"], state["images"]),
+            },
         ]
-        tool_outputs = []
-        tool_steps = 0
-
-        while tool_steps < MAX_TOOL_STEPS:
-            response = self.llm_client.complete_with_tools(
-                messages=messages,
-                tools=self._tool_specs(),
-                temperature=0,
-            )
-
-            if response["tool_calls"]:
-                messages.append(response["assistant_message"])
-
-                for tool_call in response["tool_calls"]:
-                    handler = self.tools.get(tool_call["name"])
-                    if handler is None:
-                        continue
-                    display_name = self._tool_display_name(tool_call["name"])
-                    yield {"stage": "tool", "status": "started", "name": display_name}
-                    try:
-                        result = handler(**tool_call["arguments"])
-                        tool_outputs.append(
-                            {
-                                "tool_name": tool_call["name"],
-                                "arguments": tool_call["arguments"],
-                                "result": result,
-                            }
-                        )
-                        tool_steps += 1
-                        messages.append(
-                            {
-                                "role": "tool",
-                                "tool_call_id": tool_call["id"],
-                                "name": tool_call["name"],
-                                "content": json.dumps(result, ensure_ascii=False),
-                            }
-                        )
-                    except Exception:
-                        yield {"stage": "tool", "status": "failed", "name": display_name}
-                        raise
-                    yield {"stage": "tool", "status": "completed", "name": display_name}
-                continue
-
-            return {
-                "execution_plan": execution_plan,
-                "draft_answer": response["content"] or "",
-                "tool_outputs": tool_outputs,
-                "planner_debug": planner_debug,
-                "has_images": bool(images),
-            }
-
         return {
             "execution_plan": execution_plan,
-            "draft_answer": "",
-            "tool_outputs": tool_outputs,
             "planner_debug": planner_debug,
-            "has_images": bool(images),
+            "messages": messages,
         }
 
-    def _consume_execution(
-        self,
-        execution_stream: Generator[Dict[str, Any], None, Dict[str, Any]],
-    ) -> Dict[str, Any]:
-        while True:
+    def _agent_decision_node(self, state: AgentState) -> Dict[str, Any]:
+        response = self.llm_client.complete_with_tools(
+            messages=state["messages"],
+            tools=self._tool_specs(),
+            temperature=0,
+        )
+        if response["tool_calls"]:
+            return {
+                "messages": state["messages"] + [response["assistant_message"]],
+                "pending_tool_calls": response["tool_calls"],
+            }
+        return {
+            "pending_tool_calls": [],
+            "draft_answer": response["content"] or "",
+        }
+
+    def _tools_node(self, state: AgentState) -> Dict[str, Any]:
+        messages = state["messages"]
+        tool_outputs = list(state["tool_outputs"])
+        tool_steps = state["tool_steps"]
+        streaming = state["streaming"]
+
+        for tool_call in state["pending_tool_calls"]:
+            handler = self.tools.get(tool_call["name"])
+            if handler is None:
+                continue
+            display_name = self._tool_display_name(tool_call["name"])
+            if streaming:
+                self._emit_status({"stage": "tool", "status": "started", "name": display_name})
             try:
-                next(execution_stream)
-            except StopIteration as stop:
-                return stop.value
+                result = handler(**tool_call["arguments"])
+                tool_outputs.append(
+                    {
+                        "tool_name": tool_call["name"],
+                        "arguments": tool_call["arguments"],
+                        "result": result,
+                    }
+                )
+                tool_steps += 1
+                messages = messages + [
+                    {
+                        "role": "tool",
+                        "tool_call_id": tool_call["id"],
+                        "name": tool_call["name"],
+                        "content": json.dumps(result, ensure_ascii=False),
+                    }
+                ]
+            except Exception:
+                if streaming:
+                    self._emit_status({"stage": "tool", "status": "failed", "name": display_name})
+                raise
+            if streaming:
+                self._emit_status({"stage": "tool", "status": "completed", "name": display_name})
+
+        return {
+            "messages": messages,
+            "tool_outputs": tool_outputs,
+            "tool_steps": tool_steps,
+            "pending_tool_calls": [],
+        }
+
+    def _finalizer_node(self, state: AgentState) -> Dict[str, Any]:
+        if state["streaming"]:
+            self._emit_status({"stage": "generating"})
+            parts: List[str] = []
+            for text in self._stream_finalize_answer(
+                user_query=state["user_query"],
+                execution_plan=state["execution_plan"],
+                draft_answer=state["draft_answer"],
+                tool_outputs=state["tool_outputs"],
+                has_images=state["has_images"],
+            ):
+                parts.append(text)
+                self._emit_delta(text)
+            answer = "".join(parts) or state["draft_answer"]
+        else:
+            answer = self._finalize_answer(
+                user_query=state["user_query"],
+                execution_plan=state["execution_plan"],
+                draft_answer=state["draft_answer"],
+                tool_outputs=state["tool_outputs"],
+                has_images=state["has_images"],
+            )
+        return {"answer": answer}
+
+    def _route_after_decision(self, state: AgentState) -> str:
+        if state["pending_tool_calls"] and state["tool_steps"] < MAX_TOOL_STEPS:
+            return "tools"
+        return "finalizer"
+
+    def _route_after_tools(self, state: AgentState) -> str:
+        if state["tool_steps"] < MAX_TOOL_STEPS:
+            return "agent_decision"
+        return "finalizer"
 
     def _tool_display_name(self, tool_name: str) -> str:
         return TOOL_DISPLAY_NAMES.get(tool_name, UNKNOWN_TOOL_DISPLAY_NAME)
@@ -572,87 +700,69 @@ class PatientAgent:
     # ------------------------------------------------------------------
 
     def _build_tool_registry(self) -> Dict[str, ToolHandler]:
-        return {
-            "verify_patient_identity": lambda **kwargs: mcp_tool_service.verify_patient(
-                self.db, **kwargs
-            ),
-            "get_patient_profile": lambda **kwargs: mcp_tool_service.get_patient_profile(
-                self.db, **kwargs
-            ),
-            "get_patient_medical_cases": (
-                lambda **kwargs: mcp_tool_service.get_patient_medical_cases(
-                    self.db, **kwargs
-                )
-            ),
-            "get_patient_visit_records": (
-                lambda **kwargs: mcp_tool_service.get_patient_visit_records(
-                    self.db, **kwargs
-                )
-            ),
-        }
+        def make_handler(name: str) -> ToolHandler:
+            def handler(**kwargs: Any) -> Dict[str, Any]:
+                # The MCP server opens its own database Session, so the tool
+                # result is obtained end-to-end over the MCP protocol.
+                return self.mcp_client.call_tool(name, kwargs)
+
+            return handler
+
+        return {name: make_handler(name) for name in MCP_ALLOWED_TOOLS}
 
     def _tool_specs(self) -> List[Dict[str, Any]]:
-        return [
-            {
-                "type": "function",
-                "function": {
-                    "name": "verify_patient_identity",
-                    "description": "校验患者身份，可通过 patient_code 搭配 phone 或 id_number 验证。",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "patient_code": {"type": "string"},
-                            "phone": {"type": "string"},
-                            "id_number": {"type": "string"},
-                        },
-                        "required": ["patient_code"],
+        specs: List[Dict[str, Any]] = []
+        for tool in self.mcp_client.list_tools():
+            if tool["name"] not in MCP_ALLOWED_TOOLS:
+                continue
+            specs.append(
+                {
+                    "type": "function",
+                    "function": {
+                        "name": tool["name"],
+                        "description": tool["description"],
+                        "parameters": self._openai_parameters(tool["inputSchema"]),
                     },
-                },
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "get_patient_profile",
-                    "description": "获取患者基础身份信息。",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "patient_id": {"type": "integer"},
-                            "patient_code": {"type": "string"},
-                        },
-                    },
-                },
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "get_patient_medical_cases",
-                    "description": "查询患者病例信息。",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "patient_id": {"type": "integer"},
-                            "patient_code": {"type": "string"},
-                        },
-                    },
-                },
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "get_patient_visit_records",
-                    "description": "查询患者就诊记录。",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "patient_id": {"type": "integer"},
-                            "patient_code": {"type": "string"},
-                            "limit": {
-                                "type": "integer",
-                                "description": "返回记录条数。查最近一次时传 1。",
-                            },
-                        },
-                    },
-                },
-            },
-        ]
+                }
+            )
+        return specs
+
+    @staticmethod
+    def _openai_parameters(input_schema: Dict[str, Any]) -> Dict[str, Any]:
+        """Build an OpenAI-compatible ``parameters`` object from an MCP schema.
+
+        FastMCP marks optional parameters as ``anyOf: [{...}, {type: null}]``
+        plus ``default``/``title``.  Providers may reject those JSON-Schema
+        extras, so this collapses each property to its non-null type and drops
+        the decorative keys while preserving ``required``.
+        """
+        parameters: Dict[str, Any] = {
+            "type": input_schema.get("type", "object"),
+            "properties": {},
+        }
+        for name, prop in (input_schema.get("properties") or {}).items():
+            parameters["properties"][name] = PatientAgent._openai_property(prop)
+        required = input_schema.get("required")
+        if required:
+            parameters["required"] = required
+        return parameters
+
+    @staticmethod
+    def _openai_property(prop: Dict[str, Any]) -> Dict[str, Any]:
+        if not isinstance(prop, dict):
+            return {"type": "string"}
+        candidates = prop.get("anyOf")
+        if isinstance(candidates, list):
+            for candidate in candidates:
+                if isinstance(candidate, dict) and candidate.get("type") != "null":
+                    return {
+                        key: value
+                        for key, value in candidate.items()
+                        if key not in ("default", "title")
+                    }
+            return {"type": "string"}
+        return {
+            key: value
+            for key, value in prop.items()
+            if key not in ("default", "title")
+        }

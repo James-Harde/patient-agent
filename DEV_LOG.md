@@ -2,6 +2,153 @@
 
 ## 2026-08-13
 
+### Change (9) — MCP 工具层一期：Agent 通过真实 MCP client/server 协议调用业务工具
+
+把 `PatientAgent` 之前对 `mcp_tool_service` 的直接调用，替换为通过本地 stdio MCP server（`app.mcp_server.py`）走真实 MCP client/server 协议调用，复用已有的四个 FastMCP 工具。Agent 编排、LangGraph 节点、条件边、`MAX_TOOL_STEPS`、模型调用次数、`run()`/`run_stream()` 签名与返回结构均保持不变。
+
+**Transport（`app/mcp_client.py`）：**
+
+- 新增轻量同步 MCP client `MCPToolClient`，内部用 `asyncio.run` 包装异步官方接口：`StdioServerParameters` → `stdio_client` → `ClientSession` → `session.initialize()` → `session.list_tools()` / `session.call_tool()`。
+- 通过 `sys.executable -m app.mcp_server` 启动本地 stdio server，`StdioServerParameters.cwd` 稳定指向 `Agent/`（`Path(__file__).resolve().parent.parent`）；不要求用户手工启动第二个服务、不增加端口。
+- 每次操作都在 `async with stdio_client(...)` + `async with ClientSession(...)` 上下文管理器内完成，session 与子进程随上下文退出而关闭；工具调用采用短生命周期 stdio session，优先清晰可靠。
+
+**工具发现（`list_tools()`）：**
+
+- 从 MCP `list_tools()` 读取 name / description / inputSchema，`description` 经 `textwrap.dedent().strip()` 清理 docstring 缩进。
+- 只保留四个白名单工具：`verify_patient_identity`、`get_patient_profile`、`get_patient_medical_cases`、`get_patient_visit_records`；其余一律过滤。
+- 工具列表进程内缓存（模块级 `_tools_cache` + 线程锁），避免每个决策节点重复拉起发现子进程。
+
+**结果解析（`call_tool()`）：**
+
+- `CallToolResult.isError == true` 视为失败，抛 `MCPToolError`。
+- 优先读取 `structuredContent`；缺失时安全解析 `TextContent` 的 JSON，解析失败时回退为 `{"text": ...}`。
+- 返回值保持 Agent 期望的 dict/list 结构（`structuredContent` 即服务返回的 dict，直接透传）。
+
+**超时与安全边界：**
+
+- 默认 60 秒超时；`initialize` 与 `list_tools`/`call_tool` 均用 `asyncio.wait_for` 包裹，超时、协议失败统一抛 `MCPToolError`。
+- 错误日志只记录异常类型（`logger.error("MCP operation failed (%s)", type(exc).__name__)`），不输出患者参数、API Key、完整工具结果或堆栈。
+- `call_tool` 对白名单外的工具名直接抛 `MCPToolError`，不拉起 server。
+
+**Agent 接入（`patient_agent.py`）：**
+
+- 移除 `from app.services import mcp_tool_service`，新增 `from app.mcp_client import MCPToolClient`；`__init__` 持有 `self.mcp_client`。
+- `_tool_specs()` 改为从 `self.mcp_client.list_tools()` 生成 OpenAI-compatible tool schema；用 `_openai_parameters()` 把 FastMCP 的 `anyOf:[{...},{type:null}]` / `default` / `title` 归一化为普通 `type`（保留 `required`），产出与原手写 schema 等价的形状。
+- `_build_tool_registry()` 改为 MCP 调用适配器：每个工具名对应一个闭包 `handler(**kwargs) -> self.mcp_client.call_tool(name, kwargs)`，无自动回退到直接 service 调用。
+- 仅暴露四个白名单工具（`MCP_ALLOWED_TOOLS = frozenset(TOOL_DISPLAY_NAMES)`）；未知工具在 `_tool_specs` 与 `call_tool` 两层拒绝。
+- 工具 `started/completed/failed` SSE 状态、工具参数与原始结果不外泄、LangGraph 节点与条件边、`MAX_TOOL_STEPS`、模型调用次数均保持不变。
+
+**`mcp_server.py` 保持不变：** 继续只负责协议暴露与数据库 `Session` 生命周期，不复制 service 业务逻辑（本任务未改动该文件）。
+
+**验证结果：**
+
+- `patient_agent.py`、`mcp_client.py` 通过 `ast.parse` 与 `compile()` 语法检查。
+- `git diff --check` 通过（无空白错误）。
+- 真实 MCP 往返已在本机验证：`MCPToolClient.list_tools()` 返回恰好四个白名单工具及正确 schema；`call_tool('verify_patient_identity', {'patient_code':'P0003','phone':'13800000003'})` 返回 `{"verified": true, "patient": {...}}`（含掩码手机号/身份证），确认调用经过 MCP 而非直接 service。
+- `PatientAgent._tool_specs()` 产出 4 个工具、schema 与原手写一致；`agent.tools['verify_patient_identity'](...)` 通过 MCP 返回结构化结果。
+- 未运行真实模型、浏览器、图片或 TTS 人工验收；当前状态为“MCP 主链路已实现，等待人工验收”。
+
+**本任务修改文件：**
+
+- `.gitignore`（新增 `/.venv*/`）
+- `Agent/requirements.txt`（`mcp>=1.12.0,<2.0.0`）
+- `Agent/app/mcp_client.py`（新增）
+- `Agent/app/orchestration/patient_agent.py`
+- `DEV_STATUS.md`
+- `DEV_LOG.md`
+- `MANUAL_TESTS.md`
+
+**范围外 git 变化：**
+
+- `.venv312/`、`Agent/data/patient_agent.db`、`Agent/data/faiss/*`、`__pycache__/*.pyc` 均未纳入本任务，未修改、未还原、未提交。
+- `mcp_server.py`、`routes.py`、前端、数据库模型、业务 service、TTS、RAG、FAISS、模型配置均未修改。
+
+### Remaining Issues
+
+- 按 `MANUAL_TESTS.md` 的“MCP 工具层一期测试”完成六项人工验收。
+
+---
+
+### Change (8) — LangGraph 等价迁移（编排层第一阶段）
+
+把 `PatientAgent` 内部手写的 ReAct 风格 `while` 工具循环等价替换为 LangGraph `StateGraph`，保持对外 API、SSE、工具、记忆、TTS 与前端行为不变。只做等价迁移，不新增业务功能、不调整 Prompt / 工具实现 / 模型选择 / 回答策略、不引入 LangChain 封装、不接入 MCP、不启用 Checkpointer。
+
+**图结构（`_build_graph`）：**
+
+```text
+START → planner → agent_decision
+                    ├─ 有 pending_tool_calls 且 tool_steps < MAX_TOOL_STEPS → tools
+                    └─ 无工具调用或达到上限 → finalizer
+        tools →     ├─ tool_steps < MAX_TOOL_STEPS → agent_decision
+                    └─ 达到上限 → finalizer
+        finalizer → END
+```
+
+**节点职责：**
+
+- `planner`：复用 `_build_execution_plan`（3 次 self-consistency `complete`），构建 system/memory/plan/user 消息；流式时先发 `planning` 状态。
+- `agent_decision`：复用 `complete_with_tools` + `_tool_specs`；有工具调用则追加 assistant 消息并写 `pending_tool_calls`，否则写 `draft_answer`。
+- `tools`：遍历 `pending_tool_calls`，复用工具 registry（`self.tools`）与 `_tool_display_name`；流式时逐个发 `tool started/completed`，异常先发 `tool failed` 再 `raise`（沿现有路径转成 `error`）。
+- `finalizer`：流式复用 `_stream_finalize_answer` → `LLMClient.stream_complete()`（先发 `generating` 再逐段 `delta`）；非流式复用 `_finalize_answer` → `LLMClient.complete()`；空答案回退 `draft_answer`。
+
+**条件边（`add_conditional_edges`）：**
+
+- `_route_after_decision`：`pending_tool_calls` 且 `tool_steps < MAX_TOOL_STEPS` → `tools`，否则 → `finalizer`。
+- `_route_after_tools`：`tool_steps < MAX_TOOL_STEPS` → `agent_decision`，否则 → `finalizer`。
+
+**State 字段（`AgentState` TypedDict）：**
+
+- 输入：`user_query`、`images`、`memory_context`、`has_images`、`debug_planner`、`streaming`。
+- Planner：`execution_plan`、`planner_debug`。
+- 工具循环：`messages`、`pending_tool_calls`、`tool_outputs`、`tool_steps`。
+- Finalizer：`draft_answer`、`answer`。
+
+数据库 `Session`、`LLMClient` 与 API Key 均留在 `PatientAgent` 实例上，不进入 State；未启用 Checkpointer，State 只存在于内存。
+
+**兼容边界：**
+
+- `PatientAgent` 类名与构造方法 `__init__(db, llm_client)` 不变。
+- `run()` / `run_stream()` 参数、返回结构和行为不变；`run_stream()` 仍是同步 Generator。
+- 自定义事件（`{"stage": ...}` 状态 / `{"text": ...}` 增量）在 `run_stream()` 内转换为既有 `{"event", "data"}` SSE 形状，LangGraph 原始 state / node update / Prompt / 工具参数 / 工具结果 / 思维链不外泄（用 `stream_mode=["custom", "values"]`，仅消费 `custom` 转发给调用方，`values` 只用于内部构建结果）。
+- `routes.py`、`llm.py`、前端、数据库、FAISS、TTS、RAG、MCP、模型配置、Query 页面均未修改；`scripts/test_qwen_agent.py` 无需修改。
+
+**旧逻辑映射：**
+
+| 旧实现 | 新实现 |
+|---|---|
+| `_execute()` 的 `yield {"stage":"planning"}` | `planner` 节点流式分支发 `planning` |
+| `while tool_steps < MAX_TOOL_STEPS` 循环 | `agent_decision` ↔ `tools` 条件边循环 |
+| 无工具调用时 `return draft_answer` | `_route_after_decision` → `finalizer` |
+| 循环耗尽返回 `draft_answer=""` | `_route_after_tools` → `finalizer` |
+| 工具 `yield started/completed/failed` + `raise` | `tools` 节点 `_emit_status` + `raise` |
+| `run()` 的 `_consume_execution` 丢弃状态事件 | `run()` 用 `.invoke()`（`streaming=False`，不触发状态事件） |
+| `run_stream()` 消费执行流 + `_stream_finalize_answer` | `run_stream()` 消费 `.stream()` custom 事件 + `finalizer` 节点 |
+
+**验证结果：**
+
+- `ast.parse` 与 `compile()` 对 `patient_agent.py` 语法检查通过（`PYTHONDONTWRITEBYTECODE=1`）。
+- `git diff --check` 通过（无空白错误）。
+- 已确认 `langgraph 1.2.11` 可导入（`import langgraph` 通过）；未运行任何会写数据库/FAISS/长期记忆的自动测试，未使用 pytest。
+- 未运行真实模型、浏览器、图片或 TTS 人工验收；当前状态为“LangGraph 已实现，等待人工验收”。
+
+**本任务修改文件：**
+
+- `Agent/requirements.txt`（新增 `langgraph>=1.0.0,<2.0.0`）
+- `Agent/app/orchestration/patient_agent.py`
+- `DEV_STATUS.md`
+- `DEV_LOG.md`
+- `MANUAL_TESTS.md`
+
+**范围外 git 变化：**
+
+- `Agent/data/patient_agent.db` 为运行数据变化，未修改、未还原、未提交。
+
+### Remaining Issues
+
+- 安装 `langgraph>=1.0.0,<2.0.0` 后按 `MANUAL_TESTS.md` 完成六项人工验收。
+
+---
+
 ### Change (7) — 清空会话主动取消与 SSE 防竞态
 
 修复 `/chat` 在生成期间清空后，旧 SSE 请求仍可能通过 `done`、`error`、`catch` 或 `finally` 把页面从“空闲”改回“已完成/请求失败”，或污染紧接着发起的新一轮请求的问题。
